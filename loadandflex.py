@@ -39,8 +39,10 @@ materials = {
     'titanium': {'E': 16.5e6, 'yield_strength': 120e3, 'density': 0.163, 'cost_per_cubic_inch': 10.0},
     'copper': {'E': 17e6, 'yield_strength': 33e3, 'density': 0.321, 'cost_per_cubic_inch': 2.5},
     'beryllium_copper': {'E': 19e6, 'yield_strength': 160e3, 'density': 0.302, 'cost_per_cubic_inch': 1.0},
-
-    'junktestmaterial': {'E': 1e4, 'yield_strength': 21e3, 'density': 0.21, 'cost_per_cubic_inch': 0.3}
+    'junktestmaterial': {'E': 1e4, 'yield_strength': 21e3, 'density': 0.21, 'cost_per_cubic_inch': 0.3},
+    'aisi_4140': {'E': 2.97e7, 'yield_strength': 9.5e4, 'density': 0.284, 'cost_per_cubic_inch': 0.5},
+    'aisi_4340': {'E': 3.05e7, 'yield_strength': 1.25e5, 'density': 0.284, 'cost_per_cubic_inch': 0.6},
+    's355': {'E': 3.05e7, 'yield_strength': 5.15e4, 'density': 0.284, 'cost_per_cubic_inch': 0.4}
 
 }
 
@@ -150,6 +152,65 @@ def calculate_youngs_modulus_and_stress(moment_of_inertia, height, E_material, l
 
     return E, stress
 
+def calculate_bending_stress(E, I_in4, y_in, load_lbf, load_position_in): # load_pos is inches from the left most support
+    # Calculate reactions at supports (assuming simply supported beam)
+    R1 = load_lbf * (beam_length - load_position_in) / beam_length
+    R2 = load_lbf * load_position_in / beam_length
+
+    # Calculate maximum bending moment
+    if load_position_in <= beam_length / 2:
+        M_max = R1 * load_position_in
+    else:
+        M_max = R2 * (beam_length - load_position_in)
+
+    # Calculate maximum stress (at the top/bottom surface of the beam)
+    stress_max = M_max * y_in / I_in4
+    return stress_max #returns psi stress
+
+def calculate_bending_stress_live_load(I, y, live_load_psf):
+    # w is the load per unit length (lb/in)
+    w = live_load_psf * (1 / 12)  # Convert psf to lb/in
+    M = (w * beam_length ** 2) / 8
+    # Calculate the bending stress (σ)
+    sigma = (M * y) / I
+
+    return sigma
+
+
+def calculate_bending_stress_from_deflection(width_in, height_in, E_psi,
+                                             length_in=2*beam_length, deflection_in=stack_displacement):
+        # """Calculate bending stress from the movement of the stacks.
+        # :param width_in:
+        # :param height_in:
+        # :param E_psi:
+        # :param length_in: used 2 * beam_length, because these calculation are for the middle of the beam, but the beam
+        # is deflecting across the entire beam length and not just down for half and up for half. mught be incorrect but it
+        # is giving numbers that are closer to what is expected
+        # :param deflection_in:
+        # :return:
+        # """
+
+    # inverted I for horizontal bendmoment
+    I = (height_in * width_in ** 3) / 12
+
+    # Calculate the load (P) from deflection
+    P = (deflection_in * 48 * E_psi * I) / (length_in ** 3)
+
+    # Calculate the bending moment (M) at the center
+    M = (P * length_in) / 4
+
+    # Calculate the distance from the neutral axis to the outermost fiber (c)
+    c = width_in / 2
+
+    # Calculate the bending stress (σ)
+    sigma = (M * c) / I
+
+    return sigma
+
+def convert_lbf_to_psf(force_lbf, area_ft2):
+    # Calculate pressure in psf
+    pressure_psf = force_lbf / area_ft2
+    return pressure_psf
 
 
 results = []
@@ -166,6 +227,9 @@ for material, properties in materials.items():
         best_design = None
         min_dimensions = float('inf')
 
+        biggest_design = None
+        max_dimensions = -float('inf')
+
         if shape in ['rectangular', 'hollow_rectangular', 'I-beam']:
             for width in np.linspace(min_width, max_width, 10):  # inches
                 for height in np.linspace(min_height, max_height, 10):  # inches
@@ -175,13 +239,25 @@ for material, properties in materials.items():
                     E_needed_for_shape_n_dim = calculate_youngs_modulus_and_stress(I, height, properties['E'])
                     print(material)
                     print(f'For {shape}, width: {width}in, height: {height}in')
-                    print(f'E_needs_to_be_under: {E_needed_for_shape_n_dim[0]}psi')
-                    print(f'stress_on_the_beam_from_flexing: {E_needed_for_shape_n_dim[1]}psi')
-
+                    # print(f'E_needs_to_be_under: {E_needed_for_shape_n_dim[0]}psi')
+                    # print(f'stress_on_the_beam_from_flexing: {E_needed_for_shape_n_dim[1]}psi')
+                    # print(f'I: {I}')
 
                     freq = natural_frequency(E, I, beam_length, m)
                     if freq < stack_frequency:
                         continue
+
+
+                    # New
+                    point_load_bending_stress = (calculate_bending_stress(E, I, y, point_load1, position1) +
+                                                 calculate_bending_stress(E, I, y, point_load2, position2))
+
+                    live_load_bending_stress = calculate_bending_stress_live_load(I, y, live_load)
+                    stack_movement_stress = calculate_bending_stress_from_deflection(width, height, E)
+                    wind_converted_psf = convert_lbf_to_psf(wind_force, width*height)
+                    wind_stress = calculate_bending_stress_live_load(I, width/2, live_load)
+                    #endnew
+
 
                     # wind force
                     deflection_horizontal = calculate_deflection(wind_force, beam_length, E, I)
@@ -194,7 +270,7 @@ for material, properties in materials.items():
 
                     # vertical loads
                     total_force = total_vertical_force + point_load1 + point_load2
-                    stress = calculate_stress(total_force, beam_length, I, y)
+                    stress = point_load_bending_stress + live_load_bending_stress + stack_movement_stress + wind_stress
                     it_can_flex_enough = can_flex_enough_bool(properties, E_needed_for_shape_n_dim[0], E_needed_for_shape_n_dim[1])
                     # print(it_can_flex_enough)
 
@@ -202,19 +278,22 @@ for material, properties in materials.items():
                     allowable_deflection_for_load = 1 #inches
                     print(f'Total Force: {total_force} |||||| Deflection: {deflection_vertical}')
                     print(f'Total Stress: {stress}  |||||| Allowable Stress: {allowable_stress}')
-                    print(f'stresstest: {stress < allowable_stress}, deflectHtest: {deflection_horizontal < allowable_deflection_for_load}, deflectVtest: {deflection_vertical < allowable_deflection_for_load}, flextest: {it_can_flex_enough}')
+                    print(f'stresstest: {stress < allowable_stress}, flextest: {it_can_flex_enough}')
                     print('')
 
 
 
 
-                    if (stress < allowable_stress and deflection_horizontal < allowable_deflection_for_load and
-                            deflection_vertical < allowable_deflection_for_load and it_can_flex_enough):
+                    if (stress < allowable_stress):
                         dimensions = width * height
                         if dimensions < min_dimensions:
                             min_dimensions = dimensions
                             cost = calculate_cost(density, volume, cost_per_cubic_inch)
                             best_design = (material, shape, width, height, cost, it_can_flex_enough)
+                        if dimensions > max_dimensions:
+                            max_dimensions = dimensions
+                            cost = calculate_cost(density, volume, cost_per_cubic_inch)
+                            biggest_design = (material, shape, width, height, cost, it_can_flex_enough)
 
         elif shape in ['round_solid', 'round_hollow']:
             for diameter in np.linspace(min_diameter, max_diameter, 10):  # inches
@@ -263,13 +342,15 @@ for material, properties in materials.items():
 
         if best_design:
             results.append(best_design)
+        if biggest_design:
+            results.append(biggest_design)
 
 
 # prints "best design" for each shape and material if meets load and flex criteria
 for result in results:
     material, shape, width, height, cost, flex_bool = result
     if shape in ['rectangular', 'hollow_rectangular', 'I-beam']:
-        print(f"Material: {material}, Shape: {shape}, Width: {width:.2f}in, Height: {height:.2f}in, Cost: ${cost:.2f}, Flex bool: {flex_bool}")
+        print(f"Material: {material}, Shape: {shape}, Width: {width:.2f}in, Height: {height:.2f}in, Cost: ${cost:.2f}")
     else:
-        print(f"Material: {material}, Shape: {shape}, Diameter: {width:.2f}in, Cost: ${cost:.2f}, Flex bool: {flex_bool}")
+        print(f"Material: {material}, Shape: {shape}, Diameter: {width:.2f}in, Cost: ${cost:.2f}")
 
