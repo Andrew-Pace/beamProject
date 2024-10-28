@@ -1,5 +1,3 @@
 to do:
 
-include thermal loads
-add materials to seperate doc
-add calculat\ions specific compressive/tensile/torsion stresses
+check equations for horizontal I beam moment of intertias
