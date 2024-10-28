@@ -2,14 +2,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 
+
+factor_of_safety = 1
 # Beam properties and loads
-L = 8.5  # Length of the beam in feet
-P1 = 357  # Point load 1 in lbs
-a1 = 2.17  # Distance of point load 1 from the left support in feet
-P2 = 234  # Point load 2 in lbs
-a2 = 8.5 - 2.82  # Distance of point load 2 from the left support in feet
-w_psf = 75  # Uniform load in lbs/ft^2
-F_w = 0  # Total horizontal wind force in lbs
+L = 9.125  # Length of the beam in feet
+P1 = factor_of_safety * 357  # Point load 1 in lbs
+a1 = 2.48  # Distance of point load 1 from the left support in feet
+P2 = factor_of_safety * 234  # Point load 2 in lbs
+a2 = L - 3.13  # Distance of point load 2 from the left support in feet
+w_psf = factor_of_safety * 75  # Uniform load in lbs/ft^2
+F_w = factor_of_safety * 0  # Total horizontal wind force in lbs
 
 
 ##### Dimensions ########
