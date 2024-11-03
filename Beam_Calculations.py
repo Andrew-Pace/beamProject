@@ -14,7 +14,9 @@ nu = 0.3  # Example value for Poisson's ratio
 
 ###### Case Variables #######
 P_w = 0  # Wind Force, lbf
-delta_T = 30  # degreeF
+delta_T = 0  # degreeF
+
+uT_lb_ft = 0  # uniform torsional load, same direction as loads
 ##########################
 ##########################
 ##########################
@@ -29,14 +31,14 @@ x1_in = 26.68  # P1 position from left, inches
 x2_in = x1_in + 42.125  # P2 position from left, inches
 yl_ft = 1 # y distance of loads from beam feet
 LL_lbsft2 = 75 # live load, lbs/ft2
-uL_lbft = LL_lbsft2 * (b_in/12)  # live load->uniform load, lbs/ft
+uL_lbft = LL_lbsft2 * (b_in/12) + 50  # live load->uniform load, lbs/ft
 
 #### DimensionCalculationsForEquations ############
 hw = ((h_in * 12) - (2 * thickness_in)) #in
 y = b_in / 2  # y, in
 z = h_in / 2  # z, in
-I_z = 0.015835438449159193  # I_z
-I_y = 0.0011864518413922365  # I_y
+I_z = 0.015835438449159193 * 20736  # I_z ft4 * in4/ft4
+I_y = 0.0011864518413922365 * 20736 # I_y ft4 * in4/ft4
 def calculate_J_I_beam(bf, tf, tw, d):
     """
     Calculate the polar moment of inertia (J) for an I-beam.
@@ -68,12 +70,18 @@ x1_ft = x1_in / 12
 x2_ft = x2_in / 12
 L_ft = L_in / 12
 Pw_lbft = P_w / L_ft
-
+I_z_ft = I_z / 20736
+I_y_ft = I_y / 20736
+h_w_in = h_in - 2 * thickness_in
+t_w = thickness_in
+I_c = (b_in*h_in**3 - b_in * h_w_in**3 + t_w * h_w_in**2) / 12
 
 # Calculate vertical reactions at supports
 R_cz = ((P1 * x1_ft) + (P2 * x2_ft) + (uL_lbft * L_ft * L_ft / 2)) / L_ft
 R_az = ((P1 * (L_ft - x1_ft)) + (P2 * (L_ft - x2_ft)) + (uL_lbft * L_ft * L_ft / 2)) / L_ft
 R_ay = P_w / 2
+print(R_az)
+print(uL_lbft)
 
 # Initialize lists to store results
 xp_values = np.linspace(0, L_ft, num=500)
@@ -92,9 +100,10 @@ epsilon_t_values = []
 sigma_Thermal_values = []
 sigma_v_values = []
 epsilon_x_values = []
+torsional_moments = []
+tau_max_values = []
 
-
-def calculate_torque(xp, P1, P2, x1_ft, x2_ft, yl_ft):
+def calculate_torque(xp, P1 = P1, P2=P2, x1_ft=x1_ft, x2_ft=x2_ft, yl_ft=yl_ft):
     """
     Calculate the torque at a given point along the beam.
 
@@ -151,6 +160,15 @@ def calculate_Q_flange_horizontal(bf, tf):
     Q_total = 2 * Q_flange
     return Q_total
 
+def torsional_moment(xp_ft):
+    if xp_ft < x1_ft:
+        M_t = -uT_lb_ft * xp_ft * (xp_ft / 2)
+    elif x1_ft <= xp_ft < x2_ft:
+        M_t = -(uT_lb_ft * xp_ft * (xp_ft / 2)) - (P1* yl_ft * (xp_ft - x1_ft))
+    else:
+        M_t = -(uT_lb_ft * xp_ft * (xp_ft / 2)) - (P1*yl_ft * (xp_ft - x1_ft)) - (P2*yl_ft * (xp_ft - x2_ft))
+    return M_t
+
 for xp in xp_values:
     # Calculate bending moment M_z
     if xp < x1_ft:
@@ -168,9 +186,11 @@ for xp in xp_values:
 
     # Calculate combined bending moment M_combined
     M_combined = math.sqrt(M_z ** 2 + M_y ** 2)
-    print(xp, M_combined)
+
     M_combined_values.append(M_combined)
 
+    M_t = torsional_moment(xp)
+    torsional_moments.append(M_t)
     # Calculate shear forces V_z and V_y
     if xp < x1_ft:
         V_z = R_az - (uL_lbft * xp)
@@ -185,15 +205,17 @@ for xp in xp_values:
     V_y_values.append(V_y)
 
     # Calculate bending stress σ_x
-    sigma_x = -(M_z * y) / I_z + (M_y * z) / I_y
+    sigma_x = - (M_y*12 * z) / I_y + (M_z*12 * y) / I_z
     sigma_x_values.append(sigma_x)
-
+    print(xp, sigma_x)
     # Calculate shear stresses τ_z and τ_y
     tau_z = (V_z * calc_Q(0)) / (I_z * thickness_in)
     tau_y = (V_y * calculate_Q_flange_horizontal(thickness_in, thickness_in)) / (I_y * thickness_in)
+    tau_max = ((V_z / (8 * I_c * t_w)) * (b_in * h_in**2 - b_in * h_w_in**2 + t_w * h_w_in**2))
 
     tau_z_values.append(tau_z)
     tau_y_values.append(tau_y)
+    tau_max_values.append(tau_max)
 
     # Calculate combined shear stress τ_zy and torsional shear stress τ_t
     tau_zy = math.sqrt(tau_z ** 2 + tau_y ** 2)
@@ -222,8 +244,8 @@ for xp in xp_values:
     sigma_v_values.append(sigma_v)
 
     # Calculate strain ε_x using Hooke's Law
-    epsilon_x = (sigma_x - nu * (sigma_x + sigma_x)) / E
-
+    epsilon_x = (sigma_x) / E
+    print(xp, epsilon_x)
     epsilon_x_values.append(epsilon_x) ##
 
 # Dictionary to map argument names to their corresponding data arrays and labels
@@ -231,11 +253,13 @@ data_dict = {
     'M_z': (M_z_values, 'Bending Moment M_z (foot-pounds)'),
     'M_y': (M_y_values, 'Bending Moment M_y (foot-pounds)'),
     'M_combined': (M_combined_values, 'Combined Bending Moment M_combined (foot-pounds)'),
-    'V_z': (V_z_values, 'Shear Force V_z (pounds)'),
-    'V_y': (V_y_values, 'Shear Force V_y (pounds)'),
-    'sigma_x': (sigma_x_values, 'Bending Stress σ_x (psi)'),
+    'M_t': (torsional_moments, 'Torsion Moment M_t (lb-ft)'),
+    'V_z': (V_z_values, 'Shear Force V_z (lbf)'),
+    'V_y': (V_y_values, 'Shear Force V_y (lbf)'),
+    'sigma_x': (sigma_x_values, 'Normal Stress σ_x (psi)'),
     'tau_z': (tau_z_values, 'Shear Stress τ_z (psi)'),
     'tau_y': (tau_y_values, 'Shear Stress τ_y (psi)'),
+    'tau_max': (tau_max_values, 'Max Shear Stress τ_y (psi)'),
     'tau_zy': (tau_zy_values, 'Combined Shear Stress τ_zy (psi)'),
     'tau_t': (tau_t_values, 'Torsional Shear Stress τ_t (psi)'),
     'tau_combined': (tau_combined_values, 'Combined Shear Stress τ_combined (psi)'),
@@ -260,7 +284,7 @@ def plot_value(xp_values, value_name, save_fig = False, mark_max = False):
         plt.xlabel('Position along the beam (feet)')
         plt.ylabel(ylabel)
         plt.title(f'{ylabel} along the beam')
-        plt.legend()
+        # plt.legend()
         plt.grid(True)
         plt.xlim(0, xp_values[-1])
         tick_interval = 0.5  # Adjust this value to change the interval
@@ -282,4 +306,4 @@ def plot_value(xp_values, value_name, save_fig = False, mark_max = False):
 
 
 # Example usage: Plotting Bending Moment M_z along the beam
-plot_value(xp_values, 'M_y', False, False)
+plot_value(xp_values, 'epsilon_x', True, False)
